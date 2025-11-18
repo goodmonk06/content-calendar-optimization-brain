@@ -10,25 +10,88 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ============================================================================
+// CORE ENTITIES
+// ============================================================================
+
+// User: System users with different roles
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  role         UserRole @default(EDITOR)
+  teamId       String?
+  avatarUrl    String?
+  preferences  Json?    // User preferences and settings
+  isActive     Boolean  @default(true)
+  lastActiveAt DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  team                Team?              @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  contentItems        ContentItem[]      @relation("ContentCreator")
+  approvals           Approval[]
+  comments            Comment[]
+  activities          Activity[]
+  campaignsCreated    Campaign[]
+
+  @@index([teamId])
+  @@index([email])
+}
+
+enum UserRole {
+  ADMIN
+  MANAGER
+  EDITOR
+  CONTRIBUTOR
+  VIEWER
+}
+
+// Team: Organization or team entity for multi-tenancy
+model Team {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  description String?
+  settings    Json?    // Team-level settings
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  users     User[]
+  channels  Channel[]
+  campaigns Campaign[]
+
+  @@index([slug])
+}
+
 // Channel: Represents different publishing channels (X, Instagram, Blog, Email)
 model Channel {
   id              String           @id @default(cuid())
   name            String
   type            ChannelType
+  teamId          String?
+  isActive        Boolean          @default(true)
   metaJson        Json?            // Channel-specific metadata (API keys, limits, etc.)
+  configuration   Json?            // Channel configuration (posting limits, preferred times, etc.)
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
 
+  team            Team?            @relation(fields: [teamId], references: [id], onDelete: Cascade)
   contentItems    ContentItem[]
   publishingSlots PublishingSlot[]
+  channelMetrics  ChannelMetrics[]
 
   @@index([type])
+  @@index([teamId])
+  @@index([isActive])
 }
 
 enum ChannelType {
   SNS    // Social networks (X, Instagram, etc.)
   BLOG
   EMAIL
+  VIDEO  // YouTube, TikTok, etc.
+  PODCAST
 }
 
 // ContentItem: Stores content ideas, drafts, and ready-to-publish items
@@ -37,49 +100,257 @@ model ContentItem {
   title           String
   bodyDraft       String?          @db.Text
   targetChannelId String
+  creatorId       String?
+  campaignId      String?
+  seriesId        String?
   tagsJson        Json?            // Array of tags for topic tracking
   status          ContentStatus
+  priority        Int              @default(0) // Higher number = higher priority
+  mediaUrls       Json?            // Array of media URLs
+  metadata        Json?            // Additional metadata
+  publishedAt     DateTime?
+  archivedAt      DateTime?
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
 
-  targetChannel   Channel          @relation(fields: [targetChannelId], references: [id], onDelete: Cascade)
-  publishingSlots PublishingSlot[]
+  targetChannel    Channel              @relation(fields: [targetChannelId], references: [id], onDelete: Cascade)
+  creator          User?                @relation("ContentCreator", fields: [creatorId], references: [id], onDelete: SetNull)
+  campaign         Campaign?            @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  series           ContentSeries?       @relation(fields: [seriesId], references: [id], onDelete: SetNull)
+  publishingSlots  PublishingSlot[]
+  approvals        Approval[]
+  comments         Comment[]
+  performance      ContentPerformance[]
 
   @@index([status])
   @@index([targetChannelId])
+  @@index([creatorId])
+  @@index([campaignId])
+  @@index([seriesId])
+  @@index([priority])
 }
 
 enum ContentStatus {
   IDEA
   DRAFT
   READY
+  IN_REVIEW
+  APPROVED
   SCHEDULED
   PUBLISHED
+  ARCHIVED
 }
 
 // PublishingSlot: Scheduled time slots for content publishing
 model PublishingSlot {
-  id            String       @id @default(cuid())
-  channelId     String
-  scheduledAt   DateTime
-  contentItemId String?
-  metaJson      Json?        // Slot-specific metadata (auto-generated, manual, etc.)
-  createdAt     DateTime     @default(now())
-  updatedAt     DateTime     @updatedAt
+  id              String          @id @default(cuid())
+  channelId       String
+  scheduledAt     DateTime
+  contentItemId   String?
+  status          SlotStatus      @default(PENDING)
+  publishedAt     DateTime?
+  metaJson        Json?           // Slot-specific metadata (auto-generated, manual, etc.)
+  errorMessage    String?
+  retryCount      Int             @default(0)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
 
   channel       Channel      @relation(fields: [channelId], references: [id], onDelete: Cascade)
   contentItem   ContentItem? @relation(fields: [contentItemId], references: [id], onDelete: SetNull)
 
   @@index([channelId, scheduledAt])
   @@index([scheduledAt])
+  @@index([status])
+}
+
+enum SlotStatus {
+  PENDING
+  PUBLISHING
+  PUBLISHED
+  FAILED
+  CANCELLED
 }
 
 // OptimizationConfig: Stores scheduling rules and constraints
 model OptimizationConfig {
   id        String   @id @default(cuid())
   name      String
+  version   Int      @default(1)
   rulesJson Json     // Rules like max posts per day, topic spacing, etc.
   isActive  Boolean  @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([isActive])
+}
+
+// ============================================================================
+// CAMPAIGN & SERIES
+// ============================================================================
+
+// Campaign: Group related content items for coordinated publishing
+model Campaign {
+  id          String         @id @default(cuid())
+  name        String
+  description String?
+  teamId      String?
+  creatorId   String?
+  startDate   DateTime?
+  endDate     DateTime?
+  goals       Json?          // Campaign goals and KPIs
+  status      CampaignStatus @default(PLANNING)
+  metadata    Json?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  team         Team?          @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  creator      User?          @relation(fields: [creatorId], references: [id], onDelete: SetNull)
+  contentItems ContentItem[]
+
+  @@index([teamId])
+  @@index([status])
+  @@index([startDate, endDate])
+}
+
+enum CampaignStatus {
+  PLANNING
+  ACTIVE
+  PAUSED
+  COMPLETED
+  ARCHIVED
+}
+
+// ContentSeries: Sequential content that should maintain narrative flow
+model ContentSeries {
+  id              String   @id @default(cuid())
+  name            String
+  description     String?
+  totalParts      Int?
+  publishingPace  Json?    // Rules for spacing between parts
+  metadata        Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  contentItems ContentItem[]
+}
+
+// ============================================================================
+// COLLABORATION & WORKFLOW
+// ============================================================================
+
+// Approval: Track approval workflow for content
+model Approval {
+  id            String         @id @default(cuid())
+  contentItemId String
+  approverId    String
+  status        ApprovalStatus @default(PENDING)
+  comments      String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  contentItem ContentItem @relation(fields: [contentItemId], references: [id], onDelete: Cascade)
+  approver    User        @relation(fields: [approverId], references: [id], onDelete: Cascade)
+
+  @@index([contentItemId])
+  @@index([approverId])
+  @@index([status])
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CHANGES_REQUESTED
+}
+
+// Comment: Comments on content items
+model Comment {
+  id            String   @id @default(cuid())
+  contentItemId String
+  authorId      String
+  content       String   @db.Text
+  metadata      Json?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  contentItem ContentItem @relation(fields: [contentItemId], references: [id], onDelete: Cascade)
+  author      User        @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([contentItemId])
+  @@index([authorId])
+}
+
+// Activity: Audit log for tracking changes and actions
+model Activity {
+  id          String       @id @default(cuid())
+  userId      String?
+  action      ActivityType
+  entityType  String
+  entityId    String
+  metadata    Json?
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime     @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@index([action])
+}
+
+enum ActivityType {
+  CREATE
+  UPDATE
+  DELETE
+  PUBLISH
+  SCHEDULE
+  APPROVE
+  REJECT
+  COMMENT
+  VIEW
+}
+
+// ============================================================================
+// ANALYTICS & PERFORMANCE
+// ============================================================================
+
+// ContentPerformance: Track engagement metrics for published content
+model ContentPerformance {
+  id            String   @id @default(cuid())
+  contentItemId String
+  views         Int      @default(0)
+  clicks        Int      @default(0)
+  shares        Int      @default(0)
+  likes         Int      @default(0)
+  comments      Int      @default(0)
+  engagement    Float    @default(0) // Calculated engagement rate
+  metadata      Json?    // Additional platform-specific metrics
+  recordedAt    DateTime @default(now())
+  createdAt     DateTime @default(now())
+
+  contentItem ContentItem @relation(fields: [contentItemId], references: [id], onDelete: Cascade)
+
+  @@index([contentItemId])
+  @@index([recordedAt])
+}
+
+// ChannelMetrics: Aggregate metrics per channel
+model ChannelMetrics {
+  id           String   @id @default(cuid())
+  channelId    String
+  date         DateTime @db.Date
+  followers    Int      @default(0)
+  posts        Int      @default(0)
+  totalReach   Int      @default(0)
+  totalEngagement Int   @default(0)
+  metadata     Json?
+  createdAt    DateTime @default(now())
+
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@unique([channelId, date])
+  @@index([channelId])
+  @@index([date])
 }

@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
+import { logger } from '@/lib/logger'
+import { handleApiError } from '@/lib/errors'
 import { z } from 'zod'
 
 const CreateChannelSchema = z.object({
@@ -11,6 +13,8 @@ const CreateChannelSchema = z.object({
 // GET /api/channels - List all channels
 export async function GET() {
   try {
+    logger.info('Fetching all channels')
+
     const channels = await prisma.channel.findMany({
       orderBy: { createdAt: 'desc' },
       include: {
@@ -23,13 +27,10 @@ export async function GET() {
       },
     })
 
+    logger.info('Successfully fetched channels', { count: channels.length })
     return NextResponse.json({ channels })
   } catch (error) {
-    console.error('Error fetching channels:', error)
-    return NextResponse.json(
-      { error: 'Failed to fetch channels' },
-      { status: 500 }
-    )
+    return handleApiError(error)
   }
 }
 
@@ -39,22 +40,15 @@ export async function POST(request: NextRequest) {
     const body = await request.json()
     const validated = CreateChannelSchema.parse(body)
 
+    logger.info('Creating new channel', { name: validated.name, type: validated.type })
+
     const channel = await prisma.channel.create({
       data: validated,
     })
 
+    logger.info('Successfully created channel', { id: channel.id })
     return NextResponse.json({ channel }, { status: 201 })
   } catch (error) {
-    if (error instanceof z.ZodError) {
-      return NextResponse.json(
-        { error: 'Validation error', details: error.errors },
-        { status: 400 }
-      )
-    }
-    console.error('Error creating channel:', error)
-    return NextResponse.json(
-      { error: 'Failed to create channel' },
-      { status: 500 }
-    )
+    return handleApiError(error)
   }
 }
