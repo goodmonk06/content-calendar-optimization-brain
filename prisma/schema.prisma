@@ -1,0 +1,85 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Channel: Represents different publishing channels (X, Instagram, Blog, Email)
+model Channel {
+  id              String           @id @default(cuid())
+  name            String
+  type            ChannelType
+  metaJson        Json?            // Channel-specific metadata (API keys, limits, etc.)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  contentItems    ContentItem[]
+  publishingSlots PublishingSlot[]
+
+  @@index([type])
+}
+
+enum ChannelType {
+  SNS    // Social networks (X, Instagram, etc.)
+  BLOG
+  EMAIL
+}
+
+// ContentItem: Stores content ideas, drafts, and ready-to-publish items
+model ContentItem {
+  id              String           @id @default(cuid())
+  title           String
+  bodyDraft       String?          @db.Text
+  targetChannelId String
+  tagsJson        Json?            // Array of tags for topic tracking
+  status          ContentStatus
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  targetChannel   Channel          @relation(fields: [targetChannelId], references: [id], onDelete: Cascade)
+  publishingSlots PublishingSlot[]
+
+  @@index([status])
+  @@index([targetChannelId])
+}
+
+enum ContentStatus {
+  IDEA
+  DRAFT
+  READY
+  SCHEDULED
+  PUBLISHED
+}
+
+// PublishingSlot: Scheduled time slots for content publishing
+model PublishingSlot {
+  id            String       @id @default(cuid())
+  channelId     String
+  scheduledAt   DateTime
+  contentItemId String?
+  metaJson      Json?        // Slot-specific metadata (auto-generated, manual, etc.)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  channel       Channel      @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  contentItem   ContentItem? @relation(fields: [contentItemId], references: [id], onDelete: SetNull)
+
+  @@index([channelId, scheduledAt])
+  @@index([scheduledAt])
+}
+
+// OptimizationConfig: Stores scheduling rules and constraints
+model OptimizationConfig {
+  id        String   @id @default(cuid())
+  name      String
+  rulesJson Json     // Rules like max posts per day, topic spacing, etc.
+  isActive  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
